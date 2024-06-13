@@ -1,0 +1,129 @@
+# execute pipeline on push event on main branch
+name: github-ci
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+jobs:
+  #Build stage
+  build:
+    runs-on: docker-runner
+
+    steps:
+    - uses: actions/checkout@v4
+      # setup java 21
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: maven
+
+    # cache maven packages
+    - name: Cache Maven packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2/repository
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+            ${{ runner.os }}-maven-
+
+    - name: Build
+      run: mvn compile
+
+  #Test stage
+  test:
+    runs-on: docker-runner
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        # setup java 21
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # cache maven packages
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Test
+        run: mvn test
+
+      - name: Upload Artefacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-artefacts
+          path: |
+              target/surefire-reports/*
+              target/site/jacoco/*
+
+  #Package stage
+  package:
+    runs-on: docker-runner
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+        # setup java 21
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # cache maven packages
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Package
+        run: mvn package
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-artefacts
+          path: target/*.war
+
+  #Deploy stage
+  deploy:
+    needs: package
+    runs-on: shell-runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Artifacts from Package
+        uses: actions/download-artifact@v4
+        with:
+          name: package-artefacts
+          path: ./target
+
+      - name: Deploy to Docker
+        run: |
+          docker rm -f tomcat || true
+          docker image rm -f connect-four || true
+          docker build -t connect-four .
+          docker run --rm -d --name tomcat -p 8080:8080 connect-four
+
